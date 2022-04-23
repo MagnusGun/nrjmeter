@@ -11,15 +11,18 @@ fn do_main(ch :&str, port :u32) -> std::result::Result<(), gpio_cdev::Error> {
         EventRequestFlags::BOTH_EDGES,
         "gpioevents",
     )? {
-        println!("{:?}", &event);
+        //println!("{:?}", &event);
         let evt = event?;
         match evt.event_type() {
             EventType::RisingEdge => {
-                if (old )
-                println!("{:?}", evt);
+                if !old.is_none() {
+                    let period = evt.timestamp() - old.as_ref().unwrap().timestamp();
+                    println!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp());
+                }
+                old = Some(evt);
             }
             EventType::FallingEdge => {
-                println!("{:?}", evt);
+                //println!("{:?}", evt);
             }
         }
     }
