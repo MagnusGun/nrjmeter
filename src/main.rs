@@ -16,17 +16,10 @@ fn do_main(ch :&str, port :u32) -> std::result::Result<(), gpio_cdev::Error> {
 
             loop {
                 output_handle.set_value(1).unwrap();
-                thread::sleep(Duration::from_millis(1000));
+                thread::sleep(Duration::from_millis(10));
                 output_handle.set_value(0).unwrap();
             }
          });
-
-         thread::spawn(|| {
-            for i in 1..10 {
-                println!("hi number {} from the spawned thread!", i);
-            }
-        });
-
 
     for event in input.events(
         LineRequestFlags::INPUT,
