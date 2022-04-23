@@ -1,12 +1,34 @@
 use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
-
+use std::thread;
+use std::time::Duration;
 
 fn do_main(ch :&str, port :u32) -> std::result::Result<(), gpio_cdev::Error> {
     let mut chip = Chip::new(ch)?;
-    let line = chip.get_line(port)?;
+    let input = chip.get_line(port)?;
+    let output = chip.get_line(18)?;
+    let output_handle = output.request(LineRequestFlags::OUTPUT, 0, "mirror-gpio")?;
+
+
     let mut old:Option<LineEvent> = None;
 
-    for event in line.events(
+        // test code for checking the period
+        thread::spawn(move|| {
+
+            loop {
+                output_handle.set_value(1).unwrap();
+                thread::sleep(Duration::from_millis(1000));
+                output_handle.set_value(0).unwrap();
+            }
+         });
+
+         thread::spawn(|| {
+            for i in 1..10 {
+                println!("hi number {} from the spawned thread!", i);
+            }
+        });
+
+
+    for event in input.events(
         LineRequestFlags::INPUT,
         EventRequestFlags::BOTH_EDGES,
         "gpioevents",
