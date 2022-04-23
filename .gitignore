@@ -1,3 +1,5 @@
-rpi-energyMeter.code-workspace
-target
-Cargo.lock
+/target
+nrjmeter.code-workspace
+/old
+build.sh
+rsync.sh
