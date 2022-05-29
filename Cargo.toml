@@ -8,4 +8,6 @@ edition = "2021"
 [dependencies]
 #rust_gpiozero = "^0.2"
 #config = "0.13"
-gpio-cdev = "0.4"
+gpio-cdev = "0.5.1"
+nats = "0.20.1"
+sprintf = "0.1.2"
