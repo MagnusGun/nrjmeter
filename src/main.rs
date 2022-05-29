@@ -7,15 +7,16 @@ use sprintf::sprintf;
 
 
 fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio_cdev::Error> {
+    println!("do_main start");
     let mut chip = Chip::new(ch)?;
     let input = chip.get_line(port)?;
     let output = chip.get_line(23)?;
     let output_handle = output.request(LineRequestFlags::OUTPUT, 0, "mirror-gpio")?;
-
+    println!("do_main configured and connected");
 
     let mut old:Option<LineEvent> = None;
 
-        // test code for checking the period
+        /* test code for checking the period
         thread::spawn(move|| {
             let period = 2000;
             loop {
@@ -25,7 +26,8 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
                 thread::sleep(Duration::from_millis(period/2));
             }
          });
-
+        */
+        
     for event in input.events(
         LineRequestFlags::INPUT,
         EventRequestFlags::BOTH_EDGES,
@@ -39,7 +41,7 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
                 if !old.is_none() {
                     let period :f64 = (evt.timestamp() - old.as_ref().unwrap().timestamp()) as f64 /1000000000 as f64;
                     if period > 0.01 {
-                        println!("period(s):: {:.3}, Current Consumption::{:.2} kwh", &period, calckwh(period));
+                        println!("period(s):: {:.3}, Current Consumption::{:.2} kwh", &period, calckwh(&period));
                         //println!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp());
                         //let result  = sprintf!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp()).unwrap();
                         let result  = sprintf!("period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
@@ -58,8 +60,10 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
 }
 
 fn main() -> std::io::Result<()> {
+    println!("Start main loop");
     let nc = nats::connect("192.168.1.130")?;
-    let res = do_main("/dev/gpiochip0", 16, &nc);
+    println!("connection to nats done");
+    let _res = do_main("/dev/gpiochip0", 16, &nc);
     //println!("{:?}",res);
     Ok(())
 }
