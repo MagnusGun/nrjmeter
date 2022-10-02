@@ -1,8 +1,8 @@
 use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
 use nats::Connection;
-use std::thread;
-use std::time::Duration;
-use sprintf::sprintf;
+use std::fmt::Write;
+
+//use sprintf::sprintf;
 
 
 
@@ -10,8 +10,8 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
     println!("do_main start");
     let mut chip = Chip::new(ch)?;
     let input = chip.get_line(port)?;
-    let output = chip.get_line(23)?;
-    let output_handle = output.request(LineRequestFlags::OUTPUT, 0, "mirror-gpio")?;
+//    let output = chip.get_line(14)?;
+//    let _output_handle = output.request(LineRequestFlags::OUTPUT, 0, "mirror-gpio")?;
     println!("do_main configured and connected");
 
     let mut old:Option<LineEvent> = None;
@@ -44,7 +44,9 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
                         println!("period(s):: {:.3}, Current Consumption::{:.2} kwh", &period, calckwh(&period));
                         //println!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp());
                         //let result  = sprintf!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp()).unwrap();
-                        let result  = sprintf!("period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
+                        //let result  = sprintf!("period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
+			            let mut result = String::new();
+                        write!(result, "period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
                         nc.publish("nrjmeter", result)?;
                     }                    
                 }
@@ -63,7 +65,7 @@ fn main() -> std::io::Result<()> {
     println!("Start main loop");
     let nc = nats::connect("192.168.1.130")?;
     println!("connection to nats done");
-    let _res = do_main("/dev/gpiochip0", 16, &nc);
+    let _res = do_main("/dev/gpiochip0", 14, &nc);
     //println!("{:?}",res);
     Ok(())
 }
