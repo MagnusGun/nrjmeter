@@ -2,12 +2,9 @@
 
 use async_nats::Client;
 use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
-//use async-nats::Connection;
-use std::fmt::Write;
-
-//use sprintf::sprintf;
-
-
+use tokio::{time::{self, sleep}, sync::watch::{self, Receiver}};
+use std::{fmt::Write, time::{Duration, SystemTime}, thread};
+use chrono::{DateTime, Utc, Timelike};
 
 async fn do_main(ch :&str, port :u32, client :&Client) -> std::result::Result<(), Box<dyn std::error::Error>> {
     //-> std::result::Result<(), gpio_cdev::Error> {
@@ -45,12 +42,12 @@ async fn do_main(ch :&str, port :u32, client :&Client) -> std::result::Result<()
                 if !old.is_none() {
                     let period :f64 = (evt.timestamp() - old.as_ref().unwrap().timestamp()) as f64 /1000000000 as f64;
                     if period > 0.01 {
-                        println!("period(s):: {:.3}, Current Consumption::{:.2} kwh", &period, calckwh(&period));
+                        println!("period(s):: {:.3}, Current Consumption::{:.2} kwh", &period, period_to_kwh(&period));
                         //println!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp());
                         //let result  = sprintf!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp()).unwrap();
                         //let result  = sprintf!("period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
 			            let mut result = String::new();
-                        write!(result, "period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
+                        write!(result, "period(s):: {:.3}, Current Consumption::{:.2} kwh", period, period_to_kwh(&period)).unwrap();
                         client.publish("nrjmeter".to_string(), result.into()).await?;
                     }                    
                 }
@@ -60,27 +57,48 @@ async fn do_main(ch :&str, port :u32, client :&Client) -> std::result::Result<()
 //                println!("{:?}", evt);
             }
         }
+        
     }
 
     Ok(())
 }
 
+fn start_hour_thread(){
+     //Spawning a 1h cron job for collecting hourly kWh consumption statistics
+    tokio::spawn(async move {
+        let mut datetime: DateTime<Utc> = SystemTime::now().into();
+        println!("timeloop started:: {}", datetime.format("%Y%m%d %T"));
+        
+        // sync to systemtime, aka will run every hour regardless of when the program was started
+        sleep(Duration::from_secs((3600-datetime.minute()*60-datetime.second())as u64)).await;
+        let mut interval = time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            datetime = SystemTime::now().into();
+            println!("timeTick:: {}", datetime.format("%Y%m%d %T"));
+            //TODO I should do something more here :)
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     println!("Start main loop");
-//    let nc = nats::connect("192.168.1.130")?;
-//let client = async_nats::connect("nats://192.168.1.130:4222").await?;
-let client = async_nats::connect("192.168.1.130").await?;
+    let (tx, mut rx) = watch::channel("hello");
+    start_hour_thread();
 
-//let client = async_nats::connect("192.168.1.130").await?;
+    //    let nc = nats::connect("192.168.1.130")?;
+    let client = async_nats::connect("192.168.1.130").await?;
+
     println!("connection to nats done");
-    let _res = do_main("/dev/gpiochip0", 14, &client);
-    //println!("{:?}",res);
+    let res = do_main("/dev/gpiochip0", 14, &client);
+    println!("{:?}",res.await);
+    thread::sleep(Duration::from_secs(20));
     Ok(())
 }
 
-fn calckwh(period :&f64)-> f64 {
+fn period_to_kwh(period :&f64)-> f64 {
     let kwhper_blinks :u32 = 2000;
-    let blinksper_hour :f64 = (1.0/period)*(60*60) as f64;
+    let blinksper_hour :f64 = 3600.0/period;
     blinksper_hour/kwhper_blinks as f64
 }
