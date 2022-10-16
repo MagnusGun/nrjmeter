@@ -1,12 +1,16 @@
+//have a look at this:: https://github.com/katyo/gpiod-rs/tree/master/tokio
+
+use async_nats::Client;
 use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
-use nats::Connection;
+//use async-nats::Connection;
 use std::fmt::Write;
 
 //use sprintf::sprintf;
 
 
 
-fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio_cdev::Error> {
+async fn do_main(ch :&str, port :u32, client :&Client) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    //-> std::result::Result<(), gpio_cdev::Error> {
     println!("do_main start");
     let mut chip = Chip::new(ch)?;
     let input = chip.get_line(port)?;
@@ -47,7 +51,7 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
                         //let result  = sprintf!("period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
 			            let mut result = String::new();
                         write!(result, "period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
-                        nc.publish("nrjmeter", result)?;
+                        client.publish("nrjmeter".to_string(), result.into()).await?;
                     }                    
                 }
                 old = Some(evt);
@@ -61,11 +65,16 @@ fn do_main(ch :&str, port :u32, nc :&Connection) -> std::result::Result<(), gpio
     Ok(())
 }
 
-fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     println!("Start main loop");
-    let nc = nats::connect("192.168.1.130")?;
+//    let nc = nats::connect("192.168.1.130")?;
+//let client = async_nats::connect("nats://192.168.1.130:4222").await?;
+let client = async_nats::connect("192.168.1.130").await?;
+
+//let client = async_nats::connect("192.168.1.130").await?;
     println!("connection to nats done");
-    let _res = do_main("/dev/gpiochip0", 14, &nc);
+    let _res = do_main("/dev/gpiochip0", 14, &client);
     //println!("{:?}",res);
     Ok(())
 }
