@@ -1,104 +1,107 @@
 //have a look at this:: https://github.com/katyo/gpiod-rs/tree/master/tokio
 
-use async_nats::Client;
-use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
-use tokio::{time::{self, sleep}, sync::watch::{self, Receiver}};
-use std::{fmt::Write, time::{Duration, SystemTime}, thread};
-use chrono::{DateTime, Utc, Timelike};
+use async_nats::{Client, connection::State};
+use tokio::sync::broadcast::{self, Receiver};
+use chrono::{DateTime, Timelike, prelude::*};
+use std::process;
 
-async fn do_main(ch :&str, port :u32, client :&Client) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    //-> std::result::Result<(), gpio_cdev::Error> {
-    println!("do_main start");
-    let mut chip = Chip::new(ch)?;
-    let input = chip.get_line(port)?;
-//    let output = chip.get_line(14)?;
-//    let _output_handle = output.request(LineRequestFlags::OUTPUT, 0, "mirror-gpio")?;
-    println!("do_main configured and connected");
+mod ext;
+use crate::ext::nrj_io::{do_main, NrjEvent};
 
-    let mut old:Option<LineEvent> = None;
-
-        /* test code for checking the period
-        thread::spawn(move|| {
-            let period = 2000;
-            loop {
-                output_handle.set_value(1).unwrap();
-                thread::sleep(Duration::from_millis(period/2));
-                output_handle.set_value(0).unwrap();
-                thread::sleep(Duration::from_millis(period/2));
-            }
-         });
-        */
-        
-    for event in input.events(
-        LineRequestFlags::INPUT,
-        EventRequestFlags::BOTH_EDGES,
-        "gpioevents",
-    )? {
-        //println!("{:?}", &event);
-        let evt = event?;
-        match evt.event_type() {
-            EventType::RisingEdge => {
-  //              println!("{:?}", &evt);
-                if !old.is_none() {
-                    let period :f64 = (evt.timestamp() - old.as_ref().unwrap().timestamp()) as f64 /1000000000 as f64;
-                    if period > 0.01 {
-                        println!("period(s):: {:.3}, Current Consumption::{:.2} kwh", &period, period_to_kwh(&period));
-                        //println!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp());
-                        //let result  = sprintf!("period(s):: {:?}\nnew_ts::{:?}\nold_ts::{:?}", period as f64/1000000000 as f64,  evt.timestamp(), old.unwrap().timestamp()).unwrap();
-                        //let result  = sprintf!("period(s):: {:.3}, Current Consumption::{:.2} kwh", period, calckwh(&period)).unwrap();
-			            let mut result = String::new();
-                        write!(result, "period(s):: {:.3}, Current Consumption::{:.2} kwh", period, period_to_kwh(&period)).unwrap();
-                        client.publish("nrjmeter".to_string(), result.into()).await?;
-                    }                    
-                }
-                old = Some(evt);
-            }
-            EventType::FallingEdge => {
-//                println!("{:?}", evt);
-            }
-        }
-        
-    }
-
-    Ok(())
-}
-
-fn start_hour_thread(){
+fn start_hourly_thread(client: Client, mut rx: Receiver<NrjEvent>){
      //Spawning a 1h cron job for collecting hourly kWh consumption statistics
     tokio::spawn(async move {
-        let mut datetime: DateTime<Utc> = SystemTime::now().into();
-        println!("timeloop started:: {}", datetime.format("%Y%m%d %T"));
-        
-        // sync to systemtime, aka will run every hour regardless of when the program was started
-        sleep(Duration::from_secs((3600-datetime.minute()*60-datetime.second())as u64)).await;
-        let mut interval = time::interval(Duration::from_secs(3600));
+        let mut prev_time = Local::now().with_timezone(Local::now().offset());
+        let mut cnt = 0;
         loop {
-            interval.tick().await;
-            datetime = SystemTime::now().into();
-            println!("timeTick:: {}", datetime.format("%Y%m%d %T"));
-            //TODO I should do something more here :)
+            tokio::select! {
+                result = rx.recv() => {
+                    let mut msg = result.expect("should have gotten a msg but something went wrong...");
+                    let timestamp = DateTime::parse_from_rfc3339(msg.get_timestamp()).expect("Couldnt parse the timestamp");
+
+                    if (timestamp.time().minute() < prev_time.time().minute()) && (prev_time.time().minute() != 0) {
+                        msg.duration = 3600.0;
+                        msg.consumption = (f64::from(cnt)/f64::from(2000)).into(); 
+                        send(msg,"energy.day", client.clone());
+
+                        cnt = 0;
+                    }
+                    cnt = cnt + 1;
+                    prev_time = timestamp;
+                }
+            }
         }
     });
 }
 
+fn start_daily_thread(client: Client, mut rx: Receiver<NrjEvent>){
+    //Spawning a 24h cron job for collecting hourly kWh consumption statistics
+    tokio::spawn(async move {
+        let mut prev_time = Local::now().with_timezone(Local::now().offset());
+        let mut cnt = 0;
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    let mut msg = result.expect("should have gotten a msg but something went wrong...");
+                    let timestamp = DateTime::parse_from_rfc3339(msg.get_timestamp()).expect("Couldnt parse the timestamp");
+
+                    if timestamp.day() != prev_time.day() {
+                        msg.duration = 86400.0;
+                        msg.consumption = (f64::from(cnt)/f64::from(2000)).into(); 
+                        send(msg,"energy.day", client.clone());
+
+                        cnt = 0;
+                    }
+                    cnt = cnt + 1;
+                    prev_time = timestamp;
+                }
+            }
+        }
+    });
+}
+
+fn start_momentary_thread(client: Client, mut rx: Receiver<NrjEvent>){
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    let msg = result.expect("should have gotten a msg but something went wrong...");
+                    send(msg,"energy.momentary", client.clone());
+                }
+            }
+        }
+    });
+}
+
+fn send(msg: NrjEvent, topic: &str, client: Client) {
+    if client.connection_state() == State::Connected {
+        let topic = String::from(topic);
+        tokio::spawn(async move {
+            let res = client.publish((*topic).to_string(), msg.to_string().into()).await;
+            match res {
+                Err(err) =>eprintln!("{}:: {}",topic, err),
+                Ok(value) => value,
+            }
+        });
+    } else {
+        eprintln!("{}:: NATS client state:: {:?}",topic, client.connection_state());
+    }
+}
+
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
-    println!("Start main loop");
-    let (tx, mut rx) = watch::channel("hello");
-    start_hour_thread();
+async fn main() {//-> std::io::Result<()> {
+    let client = async_nats::connect("192.168.1.130").await.unwrap_or_else(|err|{
+        eprintln!("Couldn't connect to NATS server, exiting...{err}");
+        process::exit(1);
+    }); 
+    println!("NATS connection state: {}", client.connection_state());
 
-    //    let nc = nats::connect("192.168.1.130")?;
-    let client = async_nats::connect("192.168.1.130").await?;
+    let (tx, mut _rx) = broadcast::channel::<NrjEvent>(10);
+    start_hourly_thread(client.clone(), tx.subscribe());
+    start_daily_thread(client.clone(), tx.subscribe());
+    start_momentary_thread(client.clone(), tx.subscribe());
 
-    println!("connection to nats done");
-    let res = do_main("/dev/gpiochip0", 14, &client);
-    println!("{:?}",res.await);
-    thread::sleep(Duration::from_secs(20));
-    Ok(())
+    do_main("/dev/gpiochip0", 14, tx).await.expect("we exited the event loop")
 }
 
-fn period_to_kwh(period :&f64)-> f64 {
-    let kwhper_blinks :u32 = 2000;
-    let blinksper_hour :f64 = 3600.0/period;
-    blinksper_hour/kwhper_blinks as f64
-}
+

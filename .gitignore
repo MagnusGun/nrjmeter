@@ -3,3 +3,6 @@ nrjmeter.code-workspace
 /old
 build.sh
 rsync.sh
+errors
+slask
+nats export
