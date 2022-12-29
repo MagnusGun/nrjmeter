@@ -1,7 +1,7 @@
 //have a look at this:: https://github.com/katyo/gpiod-rs/tree/master/tokio
 
 use async_nats::{Client, connection::State};
-use tokio::sync::broadcast::{self, Receiver};
+use tokio::sync::watch::{self, Receiver};
 use chrono::{DateTime, Timelike, prelude::*};
 use std::process;
 
@@ -15,18 +15,18 @@ fn start_hourly_thread(client: Client, mut rx: Receiver<NrjEvent>){
         let mut cnt = 0;
         loop {
             tokio::select! {
-                result = rx.recv() => {
-                    let mut msg = result.expect("should have gotten a msg but something went wrong...");
+                _result = rx.changed() => {
+                    let mut msg = rx.borrow().clone();//result.expect("should have gotten a msg but something went wrong...");
                     let timestamp = DateTime::parse_from_rfc3339(msg.get_timestamp()).expect("Couldnt parse the timestamp");
 
                     if (timestamp.time().minute() < prev_time.time().minute()) && (prev_time.time().minute() != 0) {
                         msg.duration = 3600.0;
-                        msg.consumption = (f64::from(cnt)/f64::from(2000)).into(); 
-                        send(msg,"energy.day", client.clone());
+                        msg.consumption = f64::from(cnt)/f64::from(2000); 
+                        send(msg,"energy.hour", client.clone());
 
                         cnt = 0;
                     }
-                    cnt = cnt + 1;
+                    cnt += 1;
                     prev_time = timestamp;
                 }
             }
@@ -41,18 +41,18 @@ fn start_daily_thread(client: Client, mut rx: Receiver<NrjEvent>){
         let mut cnt = 0;
         loop {
             tokio::select! {
-                result = rx.recv() => {
-                    let mut msg = result.expect("should have gotten a msg but something went wrong...");
+                _result = rx.changed() => {
+                    let mut msg = rx.borrow().clone();//result.expect("should have gotten a msg but something went wrong...");
                     let timestamp = DateTime::parse_from_rfc3339(msg.get_timestamp()).expect("Couldnt parse the timestamp");
 
                     if timestamp.day() != prev_time.day() {
                         msg.duration = 86400.0;
-                        msg.consumption = (f64::from(cnt)/f64::from(2000)).into(); 
+                        msg.consumption = f64::from(cnt)/f64::from(2000);
                         send(msg,"energy.day", client.clone());
 
                         cnt = 0;
                     }
-                    cnt = cnt + 1;
+                    cnt += 1;
                     prev_time = timestamp;
                 }
             }
@@ -64,8 +64,8 @@ fn start_momentary_thread(client: Client, mut rx: Receiver<NrjEvent>){
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                result = rx.recv() => {
-                    let msg = result.expect("should have gotten a msg but something went wrong...");
+                _result = rx.changed() => {
+                    let msg = rx.borrow().clone();
                     send(msg,"energy.momentary", client.clone());
                 }
             }
@@ -77,7 +77,7 @@ fn send(msg: NrjEvent, topic: &str, client: Client) {
     if client.connection_state() == State::Connected {
         let topic = String::from(topic);
         tokio::spawn(async move {
-            let res = client.publish((*topic).to_string(), msg.to_string().into()).await;
+            let res = client.publish((*topic).to_string(), msg.to_json_string().into()).await;
             match res {
                 Err(err) =>eprintln!("{}:: {}",topic, err),
                 Ok(value) => value,
@@ -96,7 +96,8 @@ async fn main() {//-> std::io::Result<()> {
     }); 
     println!("NATS connection state: {}", client.connection_state());
 
-    let (tx, mut _rx) = broadcast::channel::<NrjEvent>(10);
+    //let (tx, mut _rx) = broadcast::channel::<NrjEvent>(10);
+    let (tx, mut _rx) = watch::channel::<NrjEvent>(NrjEvent::new(0.0));
     start_hourly_thread(client.clone(), tx.subscribe());
     start_daily_thread(client.clone(), tx.subscribe());
     start_momentary_thread(client.clone(), tx.subscribe());

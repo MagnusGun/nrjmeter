@@ -1,7 +1,7 @@
 
-use chrono::{DateTime, Local};
+use chrono::Local;
 use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
-use tokio::sync::broadcast::Sender;
+use tokio::sync::watch::Sender;
 use tokio;
 use serde::{Deserialize, Serialize};
 
@@ -19,11 +19,11 @@ use serde::{Deserialize, Serialize};
                 let evt = event?;
                 match evt.event_type() {
                     EventType::RisingEdge => {
-                        if !prev.is_none() {
+                        if prev.is_some() {
                             let period = calculate_period(prev.as_ref().unwrap(), &evt);
 
                             if period > 0.01 {
-                                tx.send(NrjEvent::new(Local::now(), period))?;
+                                tx.send(NrjEvent::new(period))?;
                             }                    
                         }
                         prev = Some(evt);
@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
     }
     
     fn calculate_period(prev: &LineEvent, curr: &LineEvent) -> f64 {
-        (curr.timestamp() - prev.timestamp()) as f64 / 1000000000 as f64
+        (curr.timestamp() - prev.timestamp()) as f64 / 1000000000_f64
     }
 
     fn period_to_kwh(period :f64)-> f64 {
@@ -51,14 +51,21 @@ use serde::{Deserialize, Serialize};
         pub consumption: f64, // Current consumption (in kilowatt-hours)
     }
     impl NrjEvent {
-        pub fn new(timestamp: DateTime<Local>, period :f64) -> NrjEvent{
+        pub fn new(period :f64) -> NrjEvent{
+            let mut duration = 0.0;
+            let mut consumption = 0.0;
+            if period > 0.0 {
+                duration =  (period*1000.0).round() / 1000.0;
+                consumption =  (period_to_kwh(period)*100.0).round() / 100.0;
+            }
+
             NrjEvent {
-                timestamp: timestamp.to_rfc3339(), // can be decoded using DateTime::parse_from_rfc3339(<timestamp>)
-                duration: (period*1000.0).round() / 1000.0,
-                consumption: (period_to_kwh(period)*100.0).round() / 100.0,
+                timestamp: Local::now().to_rfc3339(), // can be decoded using DateTime::parse_from_rfc3339(<timestamp>)
+                duration,
+                consumption,
             }
         }
-        pub fn to_string(&self) -> String{
+        pub fn to_json_string(&self) -> String{
             serde_json::to_string(&self).unwrap()
         }
         pub fn get_timestamp(&self) -> &str {
