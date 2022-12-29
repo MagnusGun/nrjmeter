@@ -2,7 +2,6 @@
 use chrono::Local;
 use gpio_cdev::{Chip, EventRequestFlags, LineRequestFlags, EventType, LineEvent};
 use tokio::sync::watch::Sender;
-use tokio;
 use serde::{Deserialize, Serialize};
 
     pub async fn do_main(ch :&str, port :u32, tx: Sender<NrjEvent>) -> std::result::Result<(), Box<dyn std::error::Error>> {
