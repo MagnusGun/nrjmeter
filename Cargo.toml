@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 gpio-cdev = "0.5.1"
-async-nats = "0.25.0"
-tokio = "1.23.0"
+async-nats = "0.26.0"
+tokio = "1.24.2"
 chrono = "0.4.23"
 serde_json = "1.0.91"
-serde = "1.0.151"
+serde = "1.0.152"

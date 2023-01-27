@@ -79,7 +79,7 @@ fn send(msg: NrjEvent, topic: &str, client: Client) {
         tokio::spawn(async move {
             let res = client.publish((*topic).to_string(), msg.to_json_string().into()).await;
             match res {
-                Err(err) =>eprintln!("{}:: {}",topic, err),
+                Err(err) =>eprintln!("{topic}:: {err}"),
                 Ok(value) => value,
             }
         });
