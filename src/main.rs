@@ -1,108 +1,104 @@
-//have a look at this:: https://github.com/katyo/gpiod-rs/tree/master/tokio
+//use rpi_gpio::process;
+mod rpi_gpio;
 
-use async_nats::{Client, connection::State};
+use async_nats::connect;
+use rpi_gpio::NrjEvent;
 use tokio::sync::watch::{self, Receiver};
-use chrono::{DateTime, Timelike, prelude::*};
-use std::process;
+use gpiocdev::{Request,line::EdgeDetection, tokio::AsyncRequest};
+use std::{time::Duration, env, process};
+use anyhow::{Context, Ok};
+use tracing::{info, error, debug};
+// use tracing_subscriber;
 
-mod ext;
-use crate::ext::nrj_io::{do_main, NrjEvent};
+#[tokio::main]
+async fn main() {
+    // use RUST_LOG=info|debug|trace|error|warn|off to set the log level...
+    //RUN_LOG=info ./nrjmeter
+    tracing_subscriber::fmt::init();
 
-fn start_hourly_thread(client: Client, mut rx: Receiver<NrjEvent>){
-     //Spawning a 1h cron job for collecting hourly kWh consumption statistics
+    // setup the one to many channel
+    let (tx, mut _rx) = watch::channel::<NrjEvent>(NrjEvent::default());
+
+    let nats_url = env::var("NATS_URL").unwrap_or_else(|_| "nats://192.168.2.5:4444".into());
+    info!("Connecting to NATS server at {}", nats_url);
+
+    // run the event handler in a separate task to avoid blocking the main thread 
+    let rx: Receiver<NrjEvent> = tx.subscribe();
     tokio::spawn(async move {
-        let mut prev_time = Local::now().with_timezone(Local::now().offset());
-        let mut cnt = 0;
-        loop {
-            tokio::select! {
-                _result = rx.changed() => {
-                    let mut msg = rx.borrow().clone();//result.expect("should have gotten a msg but something went wrong...");
-                    let timestamp = DateTime::parse_from_rfc3339(msg.get_timestamp()).expect("Couldnt parse the timestamp");
+        nrj_event_handler(rx).await;
+    });
 
-                    if (timestamp.time().minute() < prev_time.time().minute()) && (prev_time.time().minute() != 0) {
-                        msg.duration = 3600.0;
-                        msg.consumption = f64::from(cnt)/f64::from(2000); 
-                        send(msg,"energy.hour", client.clone());
+    let rx: Receiver<NrjEvent> = tx.subscribe();
+    tokio::spawn(async move {
+        event_handler_nats(nats_url, rx).await;
+    });
 
-                        cnt = 0;
+    // setup GPIO line request for rising edge detection with 10ms debounce period
+    let chip = "/dev/gpiochip0";
+    let line = 14;
+    let debounce_period = Duration::from_millis(10);
+
+    let req = get_async_request(chip, line, debounce_period).unwrap_or_else(|err| {
+        error!("Error requesting GPIO line: {}", err);
+        process::exit(1);
+    });
+
+    rpi_gpio::process_line_events(req, tx).await.expect("Error processing GPIO");
+}
+
+
+async fn event_handler_nats(nats_url: String, mut rx: Receiver<NrjEvent>){
+    let client = connect(nats_url).await.unwrap_or_else(|err|{
+        error!("Couldn't connect to NATS server, exiting... {}", err);
+        process::exit(1);
+    }); 
+    
+    info!("NATS connection state: {}", client.connection_state());
+
+    loop {
+        tokio::select! {
+            _result = rx.changed() => {
+                let borrowed_rx = rx.borrow().clone();
+                
+                if let Some(events) = borrowed_rx.get_json_events() {
+                    for (subject, payload) in events {
+                        if let Err(err) = client.publish(subject, payload.into()).await {
+                            error!("Error publishing to NATS server: {}", err);
+                        }
                     }
-                    cnt += 1;
-                    prev_time = timestamp;
                 }
             }
         }
-    });
-}
-
-fn start_daily_thread(client: Client, mut rx: Receiver<NrjEvent>){
-    //Spawning a 24h cron job for collecting hourly kWh consumption statistics
-    tokio::spawn(async move {
-        let mut prev_time = Local::now().with_timezone(Local::now().offset());
-        let mut cnt = 0;
-        loop {
-            tokio::select! {
-                _result = rx.changed() => {
-                    let mut msg = rx.borrow().clone();//result.expect("should have gotten a msg but something went wrong...");
-                    let timestamp = DateTime::parse_from_rfc3339(msg.get_timestamp()).expect("Couldnt parse the timestamp");
-
-                    if timestamp.day() != prev_time.day() {
-                        msg.duration = 86400.0;
-                        msg.consumption = f64::from(cnt)/f64::from(2000);
-                        send(msg,"energy.day", client.clone());
-
-                        cnt = 0;
-                    }
-                    cnt += 1;
-                    prev_time = timestamp;
-                }
-            }
-        }
-    });
-}
-
-fn start_momentary_thread(client: Client, mut rx: Receiver<NrjEvent>){
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _result = rx.changed() => {
-                    let msg = rx.borrow().clone();
-                    send(msg,"energy.momentary", client.clone());
-                }
-            }
-        }
-    });
-}
-
-fn send(msg: NrjEvent, topic: &str, client: Client) {
-    if client.connection_state() == State::Connected {
-        let topic = String::from(topic);
-        tokio::spawn(async move {
-            let res = client.publish((*topic).to_string(), msg.to_json_string().into()).await;
-            match res {
-                Err(err) =>eprintln!("{topic}:: {err}"),
-                Ok(value) => value,
-            }
-        });
-    } else {
-        eprintln!("{}:: NATS client state:: {:?}",topic, client.connection_state());
     }
 }
 
-#[tokio::main]
-async fn main() {//-> std::io::Result<()> {
-    let client = async_nats::connect("192.168.1.130").await.unwrap_or_else(|err|{
-        eprintln!("Couldn't connect to NATS server, exiting...{err}");
-        process::exit(1);
-    }); 
-    println!("NATS connection state: {}", client.connection_state());
-
-    //let (tx, mut _rx) = broadcast::channel::<NrjEvent>(10);
-    let (tx, mut _rx) = watch::channel::<NrjEvent>(NrjEvent::new(0.0));
-    start_hourly_thread(client.clone(), tx.subscribe());
-    start_daily_thread(client.clone(), tx.subscribe());
-    start_momentary_thread(client.clone(), tx.subscribe());
-
-    do_main("/dev/gpiochip0", 14, tx).await.expect("we exited the event loop")
+fn get_async_request(chip: &str, line: u32, debounce_period: Duration) -> Result<AsyncRequest, anyhow::Error> {//AsyncRequest {
+    let request = AsyncRequest::new(Request::builder()
+        .on_chip(chip)
+        .with_line(line)
+        .with_consumer("nrjmeter")
+        .with_edge_detection(EdgeDetection::RisingEdge)
+        .with_debounce_period(debounce_period)
+        .request()
+        .context("Error requesting GPIO line")?);
+    Ok(request)
 }
 
-
+async fn nrj_event_handler(mut rx : Receiver<NrjEvent>){
+    loop {
+        tokio::select! {
+            _result = rx.changed() => {
+                let event = rx.borrow().clone(); 
+                match event.event_type {
+                    rpi_gpio::NrjEventState::Instant => debug!("Current: {:.2} kW",
+                                                                event.pwr_current),
+                    rpi_gpio::NrjEventState::Hourly  => debug!("Current: {:.2} kW, Hourly: {:.2} kWh",
+                                                                event.pwr_current, event.pwr_hour),
+                    rpi_gpio::NrjEventState::Daily   => debug!("Current: {:.2} kW, Hourly: {:.2} kWh, Daily: {:.2} kWh",
+                                                                event.pwr_current, event.pwr_hour, event.pwr_day),
+                    rpi_gpio::NrjEventState::Unknown => continue,
+                }
+            }
+        }           
+    }
+}

@@ -6,3 +6,6 @@ rsync.sh
 errors
 slask
 nats export
+/_.cargo
+.vscode/settings.json
+.cargo/config.toml
