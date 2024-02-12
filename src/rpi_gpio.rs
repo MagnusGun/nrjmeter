@@ -1,11 +1,10 @@
 
 
-use chrono::{Local, DateTime, Timelike, Datelike};
+use chrono::{Local, DateTime, Timelike, Datelike, Utc};
 use gpiocdev::{line::EdgeEvent, tokio::AsyncRequest};
 use serde::{Serialize, Deserialize};
 use tokio::sync::watch::Sender;
-use tracing::{info, error, debug};
-use tracing_attributes::instrument;
+use tracing::{debug, error, info, span, Level};
 use std::fmt;
 
 const PULSE_PER_KWH: f64 = 2000_f64;
@@ -32,6 +31,8 @@ pub struct NrjEvent {
 }
 
 impl Default for NrjEvent {
+
+    #[tracing::instrument]
     fn default() -> Self {
         Self {
             event_type: NrjEventState::Unknown,
@@ -53,7 +54,10 @@ impl fmt::Display for NrjEvent {
     }
 }
 
-impl NrjEvent {    
+
+impl NrjEvent {
+
+    #[tracing::instrument]
     fn calc_momentary_power(&mut self, event: &EdgeEvent, pe: u64) -> Result<(), String> {
         
         // calculate the duration of the event in seconds and convert it to f64, precision
@@ -74,6 +78,7 @@ impl NrjEvent {
         }else { Err(String::from("Invalid event duration, duration is zero or negative"))}
     }
 
+    #[tracing::instrument]
     pub fn get_json_events(&self) -> Option<Vec<(String, String)>> {
         #[derive(Debug, Serialize, Deserialize)]
         struct JsonEvent {
@@ -115,6 +120,46 @@ impl NrjEvent {
         }
     }
 
+    #[tracing::instrument]
+    pub fn get_influx_line_protocol_json(&self) -> Option<Vec<(String,String)>> {
+
+        let Some(utc_ts) = Utc::now().timestamp_nanos_opt() else {
+            error!("Error getting system timestamp");
+            return None;
+        };
+
+        match self.event_type {
+            NrjEventState::Instant => {
+                let ts = self.timestamp.timestamp_nanos_opt().unwrap_or(utc_ts);
+                
+                let instant = format!("energy.instant power={:.2} {}", self.pwr_current, ts);
+                Some(vec![(String::from("energy.influx.instant"), instant)])
+            },
+            NrjEventState::Hourly => {
+                let ts = self.timestamp.timestamp_nanos_opt().unwrap_or(utc_ts);
+                let adj_ts = self.get_adjusted_timestamp().timestamp_nanos_opt().unwrap_or(utc_ts);
+                
+                let instant = format!("energy.instant power={:.2} {}", self.pwr_current, ts);
+                let hour = format!("energy.hour power={:.2} {}", self.pwr_hour, adj_ts);
+                Some(vec![(String::from("energy.influx.instant"), instant),
+                          (String::from("energy.influx.hour"),    hour)])
+            },
+            NrjEventState::Daily => {
+                let ts = self.timestamp.timestamp_nanos_opt().unwrap_or(utc_ts);
+                let adj_ts = self.get_adjusted_timestamp().timestamp_nanos_opt().unwrap_or(utc_ts);
+
+                let instant = format!("energy.instant power={:.2} {}", self.pwr_current, ts);
+                let hour = format!("energy.hour power={:.2} {}", self.pwr_hour, adj_ts);
+                let day = format!("energy.day power={:.2} {}", self.pwr_day, adj_ts);
+                Some(vec![(String::from("energy.influx.instant"), instant),
+                          (String::from("energy.influx.hour"),    hour),
+                          (String::from("energy.influx.day"),     day)])
+            },
+            NrjEventState::Unknown => None,
+        }
+    }
+
+    #[tracing::instrument]
     fn check(&mut self, timestamp: DateTime<Local>) {
         if self.timestamp.day() != timestamp.day() {
             self.event_type = NrjEventState::Daily;
@@ -135,6 +180,7 @@ impl NrjEvent {
         self.timestamp = timestamp;
     }
 
+    #[tracing::instrument]
     fn update(&mut self, event: &EdgeEvent, timestamp: DateTime<Local>) -> Result<(), String>{
         match self.prev_event {
             Some(pe) => {
@@ -150,6 +196,7 @@ impl NrjEvent {
     }
 
     // adjust the timestamp to get the hour and day event on the correct day and hour
+    #[tracing::instrument]
     fn get_adjusted_timestamp(&self) -> DateTime<Local> {
         let mut timestamp = self.timestamp;
         // we need to adjust the timestamp to get the event on the correct day
@@ -167,8 +214,10 @@ impl NrjEvent {
     }
 
 }
-//#[instrument]
+
 pub async fn process_line_events(req: AsyncRequest, tx: Sender<NrjEvent>) -> Result<(), Box<dyn std::error::Error>> {
+    let span = span!(Level::TRACE, "process_line_events");
+    let _guard = span.enter();
     // store the last event to calculate the consumption
     let mut nrj_event = NrjEvent::default();
     
@@ -188,7 +237,7 @@ pub async fn process_line_events(req: AsyncRequest, tx: Sender<NrjEvent>) -> Res
     }
 }
 
-#[instrument]
+#[tracing::instrument]
 pub async fn testmylittlefunction(a: String) {
     info!("testmylittlefunction: {:?}", a);
 }

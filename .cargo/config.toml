@@ -1,7 +1,8 @@
 [build]
-target = ["armv7-unknown-linux-gnueabihf", "aarch64-unknown-linux-gnu"]             # build for the target triple (ignored by `cargo install`)
+target = "aarch64-unknown-linux-gnu"             # build for the target triple (ignored by `cargo install`)
+#target = ["armv7-unknown-linux-gnueabihf", "aarch64-unknown-linux-gnu"]             # build for the target triple (ignored by `cargo install`)
 
-[target.armv7-unknown-linux-gnueabihf]
-linker = "arm-linux-gnueabihf-gcc-10"
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc-10"
+#[target.armv7-unknown-linux-gnueabihf]
+#linker = "arm-linux-gnueabihf-gcc-10"
+#[target.aarch64-unknown-linux-gnu]
+#linker = "aarch64-linux-gnu-gcc-10"

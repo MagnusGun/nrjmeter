@@ -7,7 +7,7 @@ use tokio::sync::watch::{self, Receiver};
 use gpiocdev::{Request,line::EdgeDetection, tokio::AsyncRequest};
 use std::{time::Duration, env, process};
 use anyhow::{Context, Ok};
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 // use tracing_subscriber;
 
 #[tokio::main]
@@ -46,7 +46,7 @@ async fn main() {
     rpi_gpio::process_line_events(req, tx).await.expect("Error processing GPIO");
 }
 
-
+#[tracing::instrument]
 async fn event_handler_nats(nats_url: String, mut rx: Receiver<NrjEvent>){
     let client = connect(nats_url).await.unwrap_or_else(|err|{
         error!("Couldn't connect to NATS server, exiting... {}", err);
@@ -60,7 +60,16 @@ async fn event_handler_nats(nats_url: String, mut rx: Receiver<NrjEvent>){
             _result = rx.changed() => {
                 let borrowed_rx = rx.borrow().clone();
                 
+                // send the events as json event
                 if let Some(events) = borrowed_rx.get_json_events() {
+                    for (subject, payload) in events {
+                        if let Err(err) = client.publish(subject, payload.into()).await {
+                            error!("Error publishing to NATS server: {}", err);
+                        }
+                    }
+                }
+                // send the events as influx line protocol
+                if let Some(events) = borrowed_rx.get_influx_line_protocol_json() {
                     for (subject, payload) in events {
                         if let Err(err) = client.publish(subject, payload.into()).await {
                             error!("Error publishing to NATS server: {}", err);
@@ -72,6 +81,7 @@ async fn event_handler_nats(nats_url: String, mut rx: Receiver<NrjEvent>){
     }
 }
 
+#[tracing::instrument]
 fn get_async_request(chip: &str, line: u32, debounce_period: Duration) -> Result<AsyncRequest, anyhow::Error> {//AsyncRequest {
     let request = AsyncRequest::new(Request::builder()
         .on_chip(chip)
@@ -84,6 +94,7 @@ fn get_async_request(chip: &str, line: u32, debounce_period: Duration) -> Result
     Ok(request)
 }
 
+#[tracing::instrument]
 async fn nrj_event_handler(mut rx : Receiver<NrjEvent>){
     loop {
         tokio::select! {
